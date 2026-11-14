@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>nora</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    line-height: 1.85;
+    font-size: 16px;
+  }
+  main { max-width: 760px; margin: 0 auto; padding: 48px 16px 160px; }
+  #doc h1 { font-size: 30px; line-height: 1.3; margin: 0 0 16px; }
+  #doc h2 { font-size: 21px; margin: 48px 0 12px; padding-bottom: 6px; border-bottom: 1px solid; }
+  #doc h3 { font-size: 17px; margin: 32px 0 8px; }
+  #doc p { margin: 0 0 14px; }
+  #doc blockquote { margin: 16px 0; padding: 4px 0 4px 16px; border-left: 2px solid; }
+  #doc hr { border: 0; border-top: 1px dashed; margin: 40px 0; }
+  #doc code { font-family: inherit; font-size: 13px; border: 1px solid; border-radius: 4px; padding: 0 6px; margin-right: 4px; }
+  #doc ul, #doc ol { padding-left: 22px; margin: 0 0 14px; }
+  #doc li { margin: 4px 0; }
+  .table-wrap { overflow-x: auto; margin: 16px 0; }
+  #doc table { border-collapse: collapse; width: 100%; font-size: 15px; }
+  #doc th, #doc td { border-bottom: 1px solid; padding: 8px 10px; text-align: left; vertical-align: top; }
+  #doc td:first-child { white-space: nowrap; }
+
+
+  /* 각주: translation-work의 각주 미리보기를 그대로 가져옴 */
+  #doc sup { line-height: 0; }
+  #doc sup[id^="fnref"] { font-size: 1em; }
+  #doc sup[id^="fnref"] a.footnote { font-size: 0.85em; }
+  #doc sup[id^="fnref"] a.footnote::before { content: "["; }
+  #doc sup[id^="fnref"] a.footnote::after { content: "]"; }
+  #doc .footnotes { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid; font-size: 15px; }
+  #doc .footnotes ol { padding-left: 1.5rem; }
+  #doc .footnotes p { margin-bottom: 0.5rem; }
+  #doc .has-footnote-preview { position: relative; }
+  #doc .footnote-preview {
+    display: none;
+    position: fixed;
+    z-index: 10;
+    width: max-content;
+    max-width: min(520px, 80vw);
+    padding: 0.65rem 0.8rem;
+    border: 1px solid;
+    border-radius: 6px;
+    background: Canvas;
+    color: CanvasText;
+    box-shadow: 0 4px 14px rgb(0 0 0 / 12%);
+    font-size: 14px;
+    line-height: 1.6;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  #doc .footnote-preview.is-visible { display: block; }
+  @media (hover: none) {
+    #doc .footnote-preview {
+      max-width: calc(100vw - 24px);
+      padding: 0.8rem 1rem;
+      font-size: 15px;
+      box-shadow: 0 6px 24px rgb(0 0 0 / 20%);
+    }
+  }
+  html { scroll-behavior: smooth; }
+
+  #doc .w { display: inline-block; }
+  #doc a .w { text-decoration: underline; text-decoration-thickness: inherit; text-underline-offset: inherit; }
+  #doc del .w, #doc s .w { text-decoration: line-through; }
+  @media (prefers-reduced-motion: reduce) { #doc .w { transform: none !important; } }
+
+  /* 스크롤 바 숨김 */
+  html { scrollbar-width: none; }
+  html::-webkit-scrollbar { display: none; }
+</style>
+</head>
+<body>
+<main><article id="doc"></article></main>
+
+<script>
+  const docEl = document.getElementById('doc');
+
+  async function load(name, push = true) {
+    try {
+      const res = await fetch(name);
+      if (!res.ok) throw new Error(res.status);
+      docEl.innerHTML = renderWithFootnotes(await res.text());
+      docEl.querySelectorAll('table').forEach(t => {
+        const w = document.createElement('div'); w.className = 'table-wrap';
+        t.parentNode.insertBefore(w, t); w.appendChild(t);
+      });
+      docEl.querySelectorAll('a[href$=".md"]').forEach(a => {
+        const target = a.getAttribute('href').replace(/^\.\//, '');
+        a.addEventListener('click', e => { e.preventDefault(); load(target); });
+      });
+    } catch (e) {
+      docEl.innerHTML = '<p>문서를 불러오지 못했어요. 같은 폴더에 ' + name + ' 파일이 있는지 확인해 주세요.</p>';
+    }
+    if (push) history.pushState({ name }, '', '#' + name.replace(/\.md$/, ''));
+    window.scrollTo(0, 0);
+    wrapWords();
+    buildFootnotePreviews();
+    requestAnimationFrame(measure);
+  }
+  window.addEventListener('popstate', e => load((e.state && e.state.name) || 'main.md', false));
+
+
+  // [^이름] 각주를 kramdown과 같은 모양(sup#fnref:이름 > a.footnote, div.footnotes > li#fn:이름)으로 만든다
+  function renderWithFootnotes(md) {
+    const defs = {};
+    const lines = md.split('\n');
+    const body = [];
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(/^\[\^([^\]]+)\]:\s?(.*)$/);
+      if (!m) { body.push(lines[i]); continue; }
+      let text = m[2];
+      while (i + 1 < lines.length && /^(\s{2,}|\t)\S/.test(lines[i + 1])) text += '\n' + lines[++i].trim();
+      defs[m[1]] = text;
+    }
+    const order = [];
+    const esc = s => encodeURIComponent(s).replace(/%/g, '');
+    let out = body.join('\n').replace(/\[\^([^\]]+)\](?!:)/g, (all, id) => {
+      if (!(id in defs)) return all;
+      if (!order.includes(id)) order.push(id);
+      const n = order.indexOf(id) + 1, k = esc(id);
+      return `<sup id="fnref:${k}"><a href="#fn:${k}" class="footnote">${n}</a></sup>`;
+    });
+    let html = marked.parse(out);
+    if (order.length) {
+      html += '<div class="footnotes"><ol>' + order.map(id => {
+        const k = esc(id);
+        const back = ` <a href="#fnref:${k}" class="reversefootnote">↩</a>`;
+        let inner = marked.parse(defs[id]).trim();
+        inner = /<\/p>$/.test(inner) ? inner.replace(/<\/p>$/, back + '</p>') : inner + back;
+        return `<li id="fn:${k}">${inner}</li>`;
+      }).join('') + '</ol></div>';
+    }
+    return html;
+  }
+
+  // translation-work/assets/js/footnotes.js 와 같은 동작
+  const isTouch = window.matchMedia('(hover: none)').matches;
+  function closeAllPreviews() {
+    docEl.querySelectorAll('.footnote-preview.is-visible').forEach(p => p.classList.remove('is-visible'));
+  }
+  if (isTouch) {
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.footnote-preview, a.footnote')) closeAllPreviews();
+    });
+  }
+
+  // 본문 각주 번호를 누르면 아래 각주로, 각주의 ↩를 누르면 다시 본문 그 자리로 이동한다
+  // (주소의 #은 문서 이름에 쓰이므로 바꾸지 않고 스크롤만 한다)
+  docEl.addEventListener('click', (e) => {
+    const a = e.target.closest('a[href^="#fn"]');
+    if (!a) return;
+    if (isTouch && a.classList.contains('footnote') && !a.closest('.footnote-preview')) return;
+    const t = document.getElementById(decodeURIComponent(a.getAttribute('href').slice(1)));
+    if (!t) return;
+    e.preventDefault();
+    closeAllPreviews();
+    const y = t.getBoundingClientRect().top + window.scrollY - window.innerHeight * 0.3;
+    window.scrollTo({ top: Math.max(0, y), behavior: 'smooth' });
+  });
+
+  function buildFootnotePreviews() {
+    docEl.querySelectorAll("sup[id^='fnref'] a.footnote").forEach((link) => {
+      const targetId = decodeURIComponent(link.getAttribute("href").slice(1));
+      const target = document.getElementById(targetId);
+      if (!target) return;
+
+      const note = target.cloneNode(true);
+      note.querySelectorAll("a[href^='#fnref']").forEach((backlink) => backlink.remove());
+
+      const preview = document.createElement("span");
+      preview.className = "footnote-preview";
+
+      const numberLink = document.createElement("a");
+      numberLink.href = link.getAttribute("href");
+      numberLink.textContent = `[${link.textContent.trim()}]`;
+      preview.append(numberLink, " ");
+
+      Array.from(note.childNodes).forEach((node) => {
+        if (node.nodeType === Node.ELEMENT_NODE && node.tagName === "P") {
+          while (node.firstChild) preview.appendChild(node.firstChild);
+          preview.append(" ");
+        } else {
+          preview.appendChild(node);
+        }
+      });
+
+      link.parentElement.appendChild(preview);
+      link.parentElement.classList.add("has-footnote-preview");
+
+      // 표 안처럼 잘리는 상자 안에서도 보이도록 화면 기준으로 띄운다
+      const place = () => {
+        const r = link.getBoundingClientRect();
+        const pw = preview.offsetWidth, ph = preview.offsetHeight;
+        const vw = document.documentElement.clientWidth, vh = window.innerHeight;
+        let left = Math.min(r.left, vw - pw - 12);
+        let top = r.bottom + 4;
+        if (top + ph > vh - 8 && r.top - ph - 4 > 8) top = r.top - ph - 4;
+        preview.style.left = Math.max(12, left) + 'px';
+        preview.style.top = top + 'px';
+      };
+      // 각주에서 미리보기로 커서를 옮기는 동안 꺼지지 않도록 잠깐 기다렸다가 닫는다
+      let hideTimer;
+      const show = () => { clearTimeout(hideTimer); if (!preview.classList.contains("is-visible")) { preview.classList.add("is-visible"); place(); } };
+      const hide = () => { clearTimeout(hideTimer); hideTimer = setTimeout(() => preview.classList.remove("is-visible"), 250); };
+      window.addEventListener('scroll', () => { if (preview.classList.contains('is-visible')) place(); }, { passive: true });
+      if (isTouch) {
+        // 모바일: 나무위키처럼 각주를 누르면 팝업으로 띄우고, 바깥을 누르면 닫는다
+        link.addEventListener("click", (e) => {
+          e.preventDefault();
+          const open = preview.classList.contains("is-visible");
+          closeAllPreviews();
+          if (!open) show();
+        });
+      } else {
+        link.parentElement.addEventListener("mouseenter", show);
+        link.parentElement.addEventListener("mouseleave", hide);
+        preview.addEventListener("mouseenter", show);
+        preview.addEventListener("mouseleave", hide);
+        link.addEventListener("focus", show);
+        link.addEventListener("blur", hide);
+      }
+    });
+  }
+
+  let words = [];
+  let active = new Set();
+
+  function wrapWords() {
+    const walker = document.createTreeWalker(docEl, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    while (walker.nextNode()) if (walker.currentNode.nodeValue.trim()) nodes.push(walker.currentNode);
+    nodes.forEach(n => {
+      const frag = document.createDocumentFragment();
+      n.nodeValue.split(/(\s+)/).forEach(part => {
+        if (!part) return;
+        if (/^\s+$/.test(part)) { frag.appendChild(document.createTextNode(part)); return; }
+        const sp = document.createElement('span'); sp.className = 'w'; sp.textContent = part;
+        frag.appendChild(sp);
+      });
+      n.parentNode.replaceChild(frag, n);
+    });
+  }
+
+  function resetAll() {
+    active.forEach(el => { el.style.transform = ''; el.style.transformOrigin = ''; });
+    active.clear();
+  }
+
+  function measure() {
+    resetAll();
+    const y = window.scrollY;
+    words = [...docEl.querySelectorAll('.w')].filter(el => !el.closest('.footnote-preview')).map(el => {
+      const r = el.getBoundingClientRect();
+      return { el, top: r.top + y, h: r.height };
+    }).sort((a, b) => a.top - b.top);
+    bend();
+  }
+
+  function firstAt(from) {
+    let lo = 0, hi = words.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (words[m].top < from) lo = m + 1; else hi = m; }
+    return lo;
+  }
+
+  function squash(w, edge, zone, side, next) {
+    const y = w.top - window.scrollY + w.h / 2;
+    let t = side === 'top' ? (y - edge) / zone : (edge - y) / zone;
+    t = Math.max(0, Math.min(1, t));
+    if (t >= 1) return;
+    const s = 0.08 + 0.92 * (1 - (1 - t) * (1 - t));
+    w.el.style.transformOrigin = side === 'top' ? '50% 0%' : '50% 100%';
+    w.el.style.transform = `scaleY(${s.toFixed(3)})`;
+    next.add(w.el);
+  }
+
+  let ticking = false;
+  function bend() {
+    ticking = false;
+    if (!words.length) return;
+    const y = window.scrollY, vh = window.innerHeight;
+    const zone = Math.max(36, Math.min(72, vh * 0.08));
+    const next = new Set();
+    for (let i = firstAt(y - 40); i < words.length && words[i].top < y + zone; i++)
+      squash(words[i], 0, zone, 'top', next);
+    for (let i = firstAt(y + vh - zone - 40); i < words.length && words[i].top < y + vh; i++)
+      squash(words[i], vh, zone, 'bottom', next);
+    active.forEach(el => { if (!next.has(el)) { el.style.transform = ''; el.style.transformOrigin = ''; } });
+    active = next;
+  }
+
+  window.addEventListener('scroll', () => { if (!ticking) { ticking = true; requestAnimationFrame(bend); } }, { passive: true });
+  let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(measure, 150); });
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(measure);
+
+  const start = (location.hash.slice(1) || 'main') + '.md';
+  load(start, false);
+
+</script>
+</body>
+</html>
