@@ -105,7 +105,7 @@
     buildFootnotePreviews();
     requestAnimationFrame(measure);
   }
-  window.addEventListener('popstate', e => load((e.state && e.state.name) || 'main.md', false));
+  window.addEventListener('popstate', e => load((e.state && e.state.name) || 'nora-main.md', false));
 
 
   // [^이름] 각주를 kramdown과 같은 모양(sup#fnref:이름 > a.footnote, div.footnotes > li#fn:이름)으로 만든다
@@ -300,7 +300,7 @@
   let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(measure, 150); });
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(measure);
 
-  const start = (location.hash.slice(1) || 'main') + '.md';
+  const start = (location.hash.slice(1) || 'nora-main') + '.md';
   load(start, false);
 
 </script>
